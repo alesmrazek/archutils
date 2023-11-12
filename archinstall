@@ -1,0 +1,1156 @@
+#!/bin/bash
+# ----------------------------------------------------------------------------------------
+#             Arch Linux - Basic Installation
+# ----------------------------------------------------------------------------------------
+# author:     Mrazek Ales
+#             https://github.com/mrazekales
+#
+# project:    https://github.com/mrazekales/archutils
+#
+# license:    LGPL-3.0 (https://opensource.org/license/lgpl-3-0/)
+
+# ----------------------------------------------------------------------------------------
+# CONFIGURATION
+# ----------------------------------------------------------------------------------------
+
+EDITOR="nano"
+
+cfg_keymap="us"
+cfg_locale=(
+    "en_US.UTF-8"
+    "cs_CZ.UTF-8"
+)
+
+cfg_boot_size="1024M"
+cfg_root_size="102400M"
+
+# ----------------------------------------------------------------------------------------
+# GLOBAL VARIABLES
+# ----------------------------------------------------------------------------------------
+
+apptitle="Arch Linux - Basic Installation Version: 0.1 (LGPLv3)"
+
+partitioning_done=" "
+formatting_done=" "
+install_ready="not ready"
+
+# ----------------------------------------------------------------------------------------
+# MAIN MENU
+# ----------------------------------------------------------------------------------------
+
+main_menu(){
+    if [ "$1" = "" ]; then
+        nextitem="."
+    else
+        nextitem=$1
+    fi
+
+    if [[ "$partitioning_done" = "done" && "$formatting_done" = "done" ]]; then
+        caninstall="ready"
+    fi
+
+    options=()
+    options+=("Keymap" " [$cfg_keymap]")
+    options+=("" "")
+    options+=("Disk Partitioning" " [$partitioning_done]")
+    options+=("Partitions Formatting" " [$formatting_done]")
+    options+=("" "")
+    options+=("Mount and Install" " [$install_ready]")
+    options+=("" "")
+    options+=("" "")
+    options+=("Reboot" "")
+
+    sel=$(whiptail --backtitle "$apptitle" --title "Main menu" --menu "" --cancel-button "Exit" --default-item "$nextitem" 0 0 0 \
+        "${options[@]}" \
+        3>&1 1>&2 2>&3)
+
+    if [ "$?" = "0" ]; then
+        case $sel in
+            "Keymap")
+                set_keymap
+                nextitem="Keymap"
+            ;;
+            "Disk Partitioning")
+                partitioning_menu
+                nextitem="Partitions Formatting"
+            ;;
+            "Partitions Formatting")
+                if [ "$partitioning_done" = "done" ]; then
+                    formatting_menu
+                else
+                    clear
+                    echo -e "First, you must create partitions in 'Disk Partitioning'"
+                    pressanykey
+                fi
+                nextitem="Mount and Install"
+            ;;
+            "Mount and Install")
+                if [ "$formatting_done" = "done" ]; then
+                    mount_partitions
+                elif (whiptail --backtitle "$apptitle" --title "Partitions Formatting" --yesno "First, you must formate partitions in 'Partitions Formatting'. \n      Are you sure that partitions are formated ?" --defaultno 0 0) then
+                    select_partitions
+                    if [[ ! "$dev_boot" = "" && ! "$dev_root" = "" && ! "$dev_home" = "" ]]; then
+                        mount_partitions
+                    fi
+                fi
+                nextitem="Reboot"
+            ;;
+            "Reboot")
+                rebootpc
+            ;;
+        esac
+
+        main_menu "$nextitem"
+    else
+        clear
+    fi
+}
+
+# ----------------------------------------------------------------------------------------
+# Disk Partitioning
+# ----------------------------------------------------------------------------------------
+
+txt_partitioning_confirm="Selected device: %1\n\nAll data will be erased! \n\nContinue?"
+txt_partitioning_clear="Clearing all partitions data..."
+txt_partitioning_create="Creating %1 partition..."
+txt_partitioning_settype="Set %1 partition type"
+
+txt_select_device="Select %1 device:"
+txt_selected_devices="Selected devices:"
+
+txt_select_format="Select partition format for %1:"
+txt_formatting="Formatting partition %1 as"
+
+partitioning_menu(){
+    partition_efi_noswap
+    select_partitions
+    clear
+    pressanykey
+}
+
+partition_efi_noswap(){
+    items=$(lsblk -d -p -n -l -o NAME -e 7,11)
+
+    options=()
+    for item in $items; do
+        options+=("$item" "")
+    done
+
+    device=$(whiptail --backtitle "$apptitle" --title "Choose device for partitioning" --menu "" 0 0 0 \
+        "${options[@]}" \
+        3>&1 1>&2 2>&3)
+
+    if [ "$?" = "0" ]; then
+        if (whiptail --backtitle "$apptitle" --title "GPT EFI noswap" --yesno "${txt_partitioning_confirm//%1/$device}" --defaultno 0 0) then
+            clear
+            echo "$txt_partitioning_clear"
+            parted $device mklabel gpt
+
+            echo "${txt_partitioning_create//%1/EFI boot}"            
+            sgdisk $device -n=1:0:+$cfg_boot_size -t=1:ef00
+            echo ""
+            pressanykey
+
+            echo "${txt_partitioning_create//%1/root}"
+            sgdisk $device -n=2:0:+$cfg_root_size
+            echo ""
+            pressanykey
+
+            echo "${txt_partitioning_create//%1/home}"
+            sgdisk $device -n=3:0:0
+            echo ""
+            pressanykey
+
+            if [ "${device::8}" == "/dev/nvm" ]; then
+                dev_boot=$device"p1"
+                dev_root=$device"p2"
+                dev_home=$device"p3"
+            else
+                dev_boot=$device"1"
+                dev_root=$device"2"
+                dev_home=$device"3"
+            fi
+        fi
+    fi
+}
+
+# ----------------------------------------------------------------------------------------
+# Select Partitions
+# ----------------------------------------------------------------------------------------
+
+select_partitions(){  
+    items=$(lsblk -p -n -l -o NAME -e 7,11)
+
+    options=()
+    for item in $items; do
+        options+=("$item" "")
+    done
+
+    dev_boot=$(whiptail --backtitle "$apptitle" --title "Select Partitions" --menu "${txt_select_device//%1/boot}" --default-item "$dev_boot" 0 0 0 \
+        "none" "-" \
+        "${options[@]}" \
+        3>&1 1>&2 2>&3)
+    if [ ! "$?" = "0" ]; then
+        return 1
+    fi
+
+    dev_root=$(whiptail --backtitle "$apptitle" --title "Select Partitions" --menu "${txt_select_device//%1/root}" --default-item "$dev_root" 0 0 0 \
+        "${options[@]}" \
+        3>&1 1>&2 2>&3)
+    if [ ! "$?" = "0" ]; then
+        return 1
+    fi
+    dev_root_real=$dev_root
+
+    dev_home=$(whiptail --backtitle "$apptitle" --title "Select Partitions" --menu "${txt_select_device//%1/home}" --default-item "$dev_home" 0 0 0 \
+        "none" "-" \
+        "${options[@]}" \
+        3>&1 1>&2 2>&3)
+    if [ ! "$?" = "0" ]; then
+        return 1
+    fi
+
+    msg="$txt_selected_devices\n\n"
+    msg=$msg"boot : "$dev_boot"\n"
+    msg=$msg"root : "$dev_root"\n"
+    msg=$msg"home : "$dev_home"\n\n"
+
+    if (whiptail --backtitle "$apptitle" --title "Select Partitions" --yesno "$msg" 0 0) then
+        isnvme=0
+        if [ "${dev_boot::8}" == "/dev/nvm" || "${dev_root::8}" == "/dev/nvm" || "${dev_home::8}" == "/dev/nvm" ]; then
+            isnvme=1
+        fi
+    fi
+
+    if [[ ! $dev_boot = "" && ! $dev_root = "" && ! $dev_home = "" ]]; then
+        partitioning_done="done"
+    else
+        partitioning_done=""
+    fi
+}
+
+# ----------------------------------------------------------------------------------------
+# Partitions Formatting
+# ----------------------------------------------------------------------------------------
+
+formatting_menu(){
+    txt_formatting_confirm="Warning, all data on selected devices will be erased ! \nFormat devices?"
+ 
+    if (whiptail --backtitle "$apptitle" --title "Partitions formatting" --yesno "$txt_formatting_confirm" --defaultno 0 0) then
+        if [ ! "$dev_boot" = "" ]; then
+            format_boot boot $dev_boot
+        fi
+        if [ ! "$dev_root" = "" ]; then
+            format_device root $dev_root noluks
+        fi
+        if [ ! "$dev_home" = "" ]; then
+            format_device home $dev_home
+        fi
+    fi
+}
+
+format_boot(){
+    clear
+    echo "${txt_formatting//%1/$2} fat32 (EFI)"
+    echo "----------------------------------------------"
+    echo "mkfs.fat -F 32 $2"
+    mkfs.fat -F 32 $2
+    pressanykey
+}
+
+format_device(){
+    options=()
+    options+=("btrfs" "")
+    options+=("ext4" "")
+
+    if [ ! "$3" = "noluks" ]; then
+        options+=("luks" "encrypted")
+    fi
+
+    sel=$(whiptail --backtitle "$apptitle" --title "Partitions Formatting" --menu "${txt_select_format//%1/$1 ($2)}" 0 0 0 \
+        "${options[@]}" \
+        3>&1 1>&2 2>&3)
+    
+    if [ ! "$?" = "0" ]; then
+        return 1
+    fi
+
+    clear
+    echo "${txt_formatting//%1/$2} $sel"
+    echo "----------------------------------------------"
+    case $sel in
+        btrfs)
+            echo "mkfs.btrfs -f $2"
+            mkfs.btrfs -f $2
+            if [ "$1" = "root" ]; then
+                echo "mount $2 /mnt"
+                echo "btrfs subvolume create /mnt/root"
+                echo "btrfs subvolume set-default /mnt/root"
+                echo "umount /mnt"
+                mount $2 /mnt
+                btrfs subvolume create /mnt/root
+                btrfs subvolume set-default /mnt/root
+                umount /mnt
+            fi
+        ;;
+        ext4)
+            echo "mkfs.ext4 $2"
+            mkfs.ext4 $2
+        ;;
+        luks)
+            echo -e "Create luks device:"
+            echo "cryptsetup luksFormat $2"
+            cryptsetup luksFormat $2
+
+            if [ ! "$?" = "0" ]; then
+                pressanykey
+                return 1
+            fi
+
+            pressanykey
+            echo ""
+            echo "Open luks device:"
+            echo "cryptsetup luksOpen $2 $1"
+            cryptsetup luksOpen $2 $1
+
+            if [ ! "$?" = "0" ]; then
+                pressanykey
+                return 1
+            fi
+
+            pressanykey
+            options=()
+            options+=("normal" "")
+            options+=("fast" "")
+
+            sel=$(whiptail --backtitle "$apptitle" --title "Partitions Formatting" --menu "Wipe device?" --cancel-button="Ignore" 0 0 0 \
+                "${options[@]}" \
+                3>&1 1>&2 2>&3)
+
+            if [ "$?" = "0" ]; then
+                case $sel in
+                    normal)
+                        echo "dd if=/dev/zero of=/dev/mapper/$1"
+                        dd if=/dev/zero of=/dev/mapper/$1 & PID=$! &>/dev/null
+                    ;;
+                    fast)
+                        echo "dd if=/dev/zero of=/dev/mapper/$1 bs=60M"
+                        dd if=/dev/zero of=/dev/mapper/$1 bs=60M & PID=$! &>/dev/null
+                    ;;
+                esac
+
+                clear
+                sleep 1
+                
+                while kill -USR1 $PID &>/dev/null
+                do
+                    sleep 1
+                done
+            fi
+
+            pressanykey
+            echo ""
+            format_device $1 /dev/mapper/$1 noluks
+
+            case $1 in
+                root)
+                    dev_root_real=$dev_root
+                    dev_root=/dev/mapper/$1
+                    luks_root=1
+                    luks_root_uuid=$(cryptsetup luksUUID $2)
+                ;;
+                home)
+                    dev_home=/dev/mapper/$1
+                    luks_home=1
+                    luks_home_crypttab="\n$1    UUID=$(cryptsetup luksUUID $2)    none"
+                ;;
+            esac
+            echo -e "luks $1 device created!"
+        ;;
+    esac
+    formatting_done="done"
+    pressanykey
+}
+
+# ----------------------------------------------------------------------------------------
+# Mount/Unmount Partitions
+# ----------------------------------------------------------------------------------------
+
+mount_partitions(){
+    clear
+
+    if [ "$dev_boot" = "" || "$dev_root" = "" || "$dev_home" = "" ]; then
+        select_partitions
+    fi
+
+    clear
+    echo "mount $dev_root /mnt"
+    mount $dev_root /mnt
+    echo "mkdir /mnt/{boot,home}"
+    mkdir /mnt/{boot,home} 2>/dev/null
+
+    if [ ! "$dev_boot" = "" ]; then
+        echo "mount $dev_boot /mnt/boot"
+        mount $dev_boot /mnt/boot
+    fi
+
+    if [ ! "$dev_home" = "" ]; then
+        echo "mount $dev_home /mnt/home"
+        mount $dev_home /mnt/home
+    fi
+
+    pressanykey
+    install_menu
+}
+
+unmount_partitions(){
+    clear
+    echo "umount -R /mnt"
+    umount -R /mnt
+    pressanykey
+}
+
+# ----------------------------------------------------------------------------------------
+# INSTALL MENU
+# ----------------------------------------------------------------------------------------
+
+# install_menu(){
+#   baseinstalled="pacstrap"
+#   bootloaderinstalled=""
+#   if [ "$1" = "" ]; then
+#     nextitem="Install Arch Linux"
+#   else
+#     nextitem=$1
+#   fi
+#   options=()
+#   options+=("Install Arch Linux" " [$baseinstalled]")
+#   options+=("Install Bootloader" " [$bootloaderinstalled]")
+#   options+=("" "")
+#   options+=("Config Arch Linux" "")
+#   sel=$(whiptail --backtitle "$apptitle" --title "Install Menu" --menu "" --cancel-button "Unmount" --default-item "$nextitem" 0 0 0 \
+#     "${options[@]}" \
+#     3>&1 1>&2 2>&3)
+#   if [ "$?" = "0" ]; then
+#     case $sel in
+#       "Install Arch Linux")
+#         install_base
+#         nextitem="Install Bootloader"
+#       ;;
+#       "Install Bootloader")
+#         install_bootloader_menu
+#         nextitem="Config Arch Linux"
+#       ;;
+#       "Config Arch Linux")
+#         conf_menu
+#         nextitem="Config Arch Linux"
+#       ;;
+#     esac
+#     install_menu "$nextitem"
+#   else
+#     unmount_partitions
+#   fi
+# }
+
+# ----------------------------------------------------------------------------------------
+# INSTALL ARCH LINUX
+# ----------------------------------------------------------------------------------------
+
+install_base(){ 
+    clear
+    echo "pacstrap -K /mnt base linux linux-firmware"        
+    pacstrap -K /mnt base linux linux-firmware
+    pressanykey
+}
+
+# ----------------------------------------------------------------------------------------
+# GRUB INSTALLATION
+# ----------------------------------------------------------------------------------------
+
+# grub_menu(){
+#   if [ "$1" = "" ]; then
+#     nextblitem="."
+#   else
+#     nextblitem=$1
+#   fi
+#   options=()
+#   options+=("Install grub" "pacstrap grub (efibootmgr), grub-mkconfig")
+#   options+=("Edit grub" "(Optional)")
+#   options+=("Install bootloader" "grub-install")
+#   sel=$(whiptail --backtitle "$apptitle" --title "Grub Install Menu" --menu "" --cancel-button "Back" --default-item "$nextblitem" 0 0 0 \
+#     "${options[@]}" \
+#     3>&1 1>&2 2>&3)
+#   if [ "$?" = "0" ]; then
+#     case $sel in
+#       "Install grub")
+#         grub_install
+#         nextblitem="${txtinstall//%1/bootloader}"
+#       ;;
+#       "Edit grub")
+#         choose_editor
+#         $EDITOR /mnt/etc/default/grub
+#         if (whiptail --backtitle "$apptitle" --title "${txtedit//%1/grub}" --yesno "Run grub-mkconfig ?" 0 0) then
+#           clear
+#           arch_chroot grub_installchroot
+#           pressanykey
+#         fi
+#         nextblitem="${txtinstall//%1/bootloader}"
+#       ;;
+#       "Install bootloader")
+#         grub_installbootloader
+#         nextblitem="${txtinstall//%1/bootloader}"
+#         bootloaderinstalled="grub"
+#       ;;
+#     esac
+#     grub_menu "$nextblitem"
+#   fi
+   
+# }
+
+# grub_install(){
+#   txtgrubluksdetected="Encrypted root partion !\n\nAdd cryptdevice= to GRUB_CMDLINE_LINUX in /etc/default/grub ?"
+  
+#   clear
+#   echo "pacstrap /mnt grub"
+#   pacstrap /mnt grub
+#   pressanykey
+  
+#   if [ "$efi" == "1" ]; then
+#     if (whiptail --backtitle "$apptitle" --title "Install efibootmgr" --yesno "Install efibootmgr ?" --defaultno 0 0) then
+#       clear
+#       echo "pacstrap /mnt efibootmgr"
+#       pacstrap /mnt efibootmgr
+#       pressanykey
+#     fi
+#   fi
+  
+#   if [ "$luksroot" = "1" ]; then
+#     if (whiptail --backtitle "$apptitle" --title "Install grub" --yesno "$txtgrubluksdetected" 0 0) then
+#       clear
+#       echo "sed -i /GRUB_CMDLINE_LINUX=/c\GRUB_CMDLINE_LINUX=\\\"cryptdevice=/dev/disk/by-uuid/$luksrootuuid:root\\\" /mnt/etc/default/grub"
+#       sed -i /GRUB_CMDLINE_LINUX=/c\GRUB_CMDLINE_LINUX=\"cryptdevice=/dev/disk/by-uuid/$luksrootuuid:root\" /mnt/etc/default/grub
+#       pressanykey
+#     fi
+#   fi
+  
+#   clear
+#   echo "grub_installchroot"
+#   arch_chroot grub_installchroot
+#   pressanykey
+# }
+
+# grub_installchroot(){
+#   echo "mkdir /boot/grub"
+#   echo "grub-mkconfig -o /boot/grub/grub.cfg"
+#   mkdir /boot/grub
+#   grub-mkconfig -o /boot/grub/grub.cfg
+#   exit
+# }
+
+# grub_installbootloader(){
+#   items=$(lsblk -d -p -n -l -o NAME -e 7,11)
+#   options=()
+#   for item in $items; do
+#     options+=("$item" "")
+#   done
+#   device=$(whiptail --backtitle "$apptitle" --title "Install bootloader" --menu "" 0 0 0 \
+#     "${options[@]}" \
+#     3>&1 1>&2 2>&3)
+#   if [ "$?" = "0" ]; then
+#     if [ "$efi" == "1" ]; then
+#       options=()
+#       options+=("EFI" "")
+#       options+=("BIOS" "")
+#       options+=("BIOS+EFI" "")
+#     else
+#       options+=("BIOS" "")
+#       options+=("EFI" "")
+#       options+=("BIOS+EFI" "")
+#     fi
+#     sel=$(whiptail --backtitle "$apptitle" --title "Install bootloader" --menu "" --cancel-button "Back" 0 0 0 \
+#       "${options[@]}" \
+#       3>&1 1>&2 2>&3)
+#     if [ "$?" = "0" ]; then
+#       clear
+#       case $sel in
+#         "BIOS") arch_chroot grub_installbootloaderchroot $device;;
+#         "EFI") arch_chroot grub_installbootloaderefichroot $device;;
+#         "BIOS+EFI") grub_installbootloaderefiusbchroot $device;;
+#       esac
+#       pressanykey
+#     fi
+#   else
+#     clear
+#     arch_chroot grub_installbootloaderchroot $device
+#     pressanykey
+#   fi
+# }
+
+# grub_installbootloaderchroot(){
+#   if [ ! "$1" = "none" ]; then
+#     echo "grub-install --target=i386-pc --recheck $1"
+#     grub-install --target=i386-pc --recheck $1
+#   fi
+#   exit
+# }
+
+# grub_installbootloaderefichroot(){
+#   if [ ! "$1" = "none" ]; then
+#     echo "grub-install --target=x86_64-efi --efi-directory=/boot --recheck $1"
+#     grub-install --target=x86_64-efi --efi-directory=/boot --recheck $1
+#     isvbox=$(lspci | grep "VirtualBox G")
+#     if [ "$isvbox" ]; then
+#       echo "VirtualBox detected, creating startup.nsh..."
+#       echo "\EFI\arch\grubx64.efi" > /boot/startup.nsh
+#     fi
+#   fi
+#   exit
+# }
+
+# grub_installbootloaderefiusbchroot(){
+#   if [ ! "$1" = "none" ]; then
+#     echo "grub-install --target=i386-pc --recheck $1"
+#     grub-install --target=i386-pc --recheck $1
+#     echo "grub-install --target=x86_64-efi --efi-directory=/boot --removable --recheck $1"
+#     grub-install --target=x86_64-efi --efi-directory=/boot --removable --recheck $1
+#     isvbox=$(lspci | grep "VirtualBox G")
+#     if [ "$isvbox" ]; then
+#       echo "VirtualBox detected, creating startup.nsh..."
+#       echo "\EFI\arch\grubx64.efi" > /boot/startup.nsh
+#     fi
+#   fi
+#   exit
+# }
+
+# # ----------------------------------------------------------------------------------------
+# # ----------------------------------------------------------------------------------------
+# # CONF MENU
+# # ----------------------------------------------------------------------------------------
+# conf_menu(){
+#   if [ "$1" = "" ]; then
+#     nextitem="."
+#   else
+#     nextitem=$1
+#   fi
+#   options=()
+#   if [ "$swapdev" = "" ]; then
+#       options+=("create Swapfile" "")
+#       options+=("remove Swapfile" "")
+#       options+=("" "")
+#   fi
+#   options+=("set Computer Name" " /etc/hostname")
+#   options+=("set Keymap" " /etc/vconsole.conf")
+#   options+=("set Locale" " /etc/locale.conf, /etc/locale.gen")
+#   options+=("set Time" " /etc/localtime")
+#   options+=("set root password" "")
+#   options+=("generate fstab" "")
+#   if [ "$luksdrive" = "1" ]; then
+#     options+=("generate crypttab" "")
+#   fi
+#   if [ "$luksroot" = "1" ]; then
+#     options+=("generate mkinitcpio.conf-luks" " (encrypt hooks)")
+#   fi
+#   if [ "$isnvme" = "1" ]; then
+#     options+=("generate mkinitcpio.conf-nvme" " (nvme module)")
+#   fi
+#   options+=("enable dhcpcd" " systemctl enable dhcpd")
+#   options+=("" "")
+#   options+=("edit fstab" " (optional)")
+#   options+=("edit crypttab" " (optional)")
+#   options+=("edit mkinitcpio.conf" " (optional)")
+#   options+=("edit mirrorlist" " (optional)")
+#   sel=$(whiptail --backtitle "$apptitle" --title "Configuration menu" --menu "" --cancel-button "Back" --default-item "$nextitem" 0 0 0 \
+#     "${options[@]}" \
+#     3>&1 1>&2 2>&3)
+#   if [ "$?" = "0" ]; then
+#     case $sel in
+#       "create Swapfile")
+#         create_swapfile
+#         nextitem="create Swapfile"
+#       ;;
+#       "remove Swapfile")
+#         remove_swapfile
+#         nextitem="remove Swapfile"
+#       ;;
+#       "set Computer Name")
+#         set_hostname
+#         nextitem="Set Computer Name"
+#       ;;
+#       "set Keymap")
+#         change_keymap
+#         nextitem="Set Keymap"
+#       ;;
+#       "set Locale")
+#         set_locale
+#         nextitem="Set Locale"
+#       ;;
+#       "set Time")
+#         set_time
+#         nextitem="Set Time"
+#       ;;
+#       "set root password")
+#         set_rootpassword
+#         nextitem="Set root password"
+#       ;;
+#       "generate fstab")
+#         genfstab_menu
+#         if [ "$luksdrive" = "1" ]; then
+#           nextitem="generate crypttab"
+#         else
+#           if [ "$luksroot" = "1" ]; then
+#             nextitem="generate mkinitcpio.conf-luks"
+#           else
+#             if [ "$isnvme" = "1" ]; then
+#               nextitem="generate mkinitcpio.conf-nvme"
+#             else
+#               nextitem="enable dhcpcd"
+#             fi
+#           fi
+#         fi
+#       ;;
+#       "generate crypttab")
+#         gen_crypttab
+#         if [ "$luksroot" = "1" ]; then
+#           nextitem="generate mkinitcpio.conf-luks"
+#         else
+#           if [ "$isnvme" = "1" ]; then
+#             nextitem="generate mkinitcpio.conf-nvme"
+#           else
+#             nextitem="generate dhcpcd"
+#           fi
+#         fi
+#       ;;
+#       "generate mkinitcpio.conf-luks")
+#         gen_mkinitcpioluks
+#         if [ "$isnvme" = "1" ]; then
+#           nextitem="generate mkinitcpio.conf-nvme}"
+#         else
+#           nextitem="enable dhcpcd}"
+#         fi
+#       ;;
+#       "generate mkinitcpio.conf-nvme")
+#         gen_mkinitcpionvme
+#         nextitem="enable dhcpcd}"
+#       ;;
+#       "edit fstab")
+#         $EDITOR /mnt/etc/fstab
+#         nextitem="edit fstab}"
+#       ;;
+#       "edit crypttab")
+#         $EDITOR /mnt/etc/crypttab
+#         nextitem="edit crypttab}"
+#       ;;
+#       "edit mkinitcpio.conf")
+#         edit_mkinitcpio
+#         nextitem="edit mkinitcpio.conf"
+#       ;;
+#       "edit mirrorlist")
+#         $EDITOR /mnt/etc/pacman.d/mirrorlist
+#         nextitem="edit mirrorlist"
+#       ;;
+#       "enable dhcpcd")
+#         enable_dhcpcd
+#         nextitem="enable dhcpcd"
+#       ;;
+#     esac
+#     conf_menu "$nextitem"
+#   fi
+# }
+
+# set_hostname(){
+#   hostname=$(whiptail --backtitle "$apptitle" --title "Set Computer Name" --inputbox "" 0 0 "archlinux" 3>&1 1>&2 2>&3)
+#   if [ "$?" = "0" ]; then
+#     clear
+#     echo "echo \"$hostname\" > /mnt/etc/hostname"
+#     echo "$hostname" > /mnt/etc/hostname
+
+#     echo "echo '127.0.0.1     localhost' > /mnt/etc/hosts"
+#     echo "127.0.0.1     localhost" > /mnt/etc/hosts
+
+#     echo "echo '::1	          localhost' >> /mnt/etc/hosts"
+#     echo "::1	          localhost" >> /mnt/etc/hosts
+
+#     echo "echo '127.0.1.1     $hostname.localdomain   $hostname' >> /mnt/etc/hosts"
+#     echo "127.0.1.1     $hostname.localdomain   $hostname" >> /mnt/etc/hosts
+#     pressanykey
+#   fi
+# }
+
+# change_keymap(){
+#   items=$(find /usr/share/kbd/keymaps/ -type f -printf "%f\n" | sort -V)
+#   options=()
+#   defsel=""
+#   for item in $items; do
+#     if [ "${item%%.*}" == "$keymap" ]; then
+#       defsel="${item%%.*}"
+#     fi
+#     options+=("${item%%.*}" "")
+#   done
+#   keymap=$(whiptail --backtitle "$apptitle" --title "Set Keymap" --menu "" --default-item "$defsel" 0 0 0 \
+#     "${options[@]}" \
+#     3>&1 1>&2 2>&3)
+#   if [ "$?" = "0" ]; then
+#     clear
+#     echo -e "echo \"KEYMAP=$keymap\" > /mnt/etc/vconsole.conf"
+#     echo -e "KEYMAP=$keymap" > /mnt/etc/vconsole.conf
+#     pressanykey
+#   fi
+# }
+
+# set_locale(){
+#   items=$(ls /usr/share/i18n/locales)
+#   options=()
+#   defsel=""
+#   for item in $items; do
+#     if [ "$defsel" == "" ]&&[ "${keymap::2}" == "${item::2}" ]; then
+#       defsel="$item"
+#     fi
+#     options+=("$item" "")
+#   done
+#   locale=$(whiptail --backtitle "$apptitle" --title "Set Locale" --menu "" --default-item "$defsel" 0 0 0 \
+#     "${options[@]}" \
+#     3>&1 1>&2 2>&3)
+#   if [ "$?" = "0" ]; then
+#     clear
+#     echo "echo \"LANG=$locale.UTF-8\" > /mnt/etc/locale.conf"
+#     echo "LANG=$locale.UTF-8" > /mnt/etc/locale.conf
+#     echo "echo \"LC_COLLATE=C\" >> /mnt/etc/locale.conf"
+#     echo "LC_COLLATE=C" >> /mnt/etc/locale.conf
+#     echo "sed -i '/"$locale".UTF-8/s/^#//g' /mnt/etc/locale.gen"
+#     sed -i '/'$locale'.UTF-8/s/^#//g' /mnt/etc/locale.gen
+#     arch_chroot set_localechroot
+#     pressanykey
+#   fi
+# }
+
+# set_localechroot(){
+#   echo "locale-gen"
+#   locale-gen
+#   exit
+# }
+
+# set_time(){
+#   items=$(ls -l /mnt/usr/share/zoneinfo/ | grep '^d' | gawk -F':[0-9]* ' '/:/{print $2}')
+#   options=()
+#   for item in $items; do
+#     options+=("$item" "")
+#   done
+
+#   timezone=$(whiptail --backtitle "$apptitle" --title "Set Time" --menu "" 0 0 0 \
+#     "${options[@]}" \
+#     3>&1 1>&2 2>&3)
+#   if [ ! "$?" = "0" ]; then
+#     return 1
+#   fi
+  
+  
+#   items=$(ls /mnt/usr/share/zoneinfo/$timezone/)
+#   options=()
+#   for item in $items; do
+#     options+=("$item" "")
+#   done
+
+#   timezone=$timezone/$(whiptail --backtitle "$apptitle" --title "Set Time" --menu "" 0 0 0 \
+#     "${options[@]}" \
+#     3>&1 1>&2 2>&3)
+#   if [ ! "$?" = "0" ]; then
+#     return 1
+#   fi
+  
+#   clear
+#   echo "ln -sf /mnt/usr/share/zoneinfo/$timezone /mnt/etc/localtime"
+#   ln -sf /usr/share/zoneinfo/$timezone /mnt/etc/localtime
+#   pressanykey
+  
+#   if (whiptail --backtitle "$apptitle" --title "Set Time" --yesno "Use UTC hardware clock ?" 0 0) then
+#     clear
+#     arch_chroot set_timeutcchroot
+#   else
+#     clear
+#     arch_chroot set_timelocalchroot
+#   fi
+  
+#   pressanykey
+# }
+
+# set_timeutcchroot(){
+#   echo "hwclock --systohc --utc"
+#   hwclock --systohc --utc
+#   exit
+# }
+
+# set_timelocalchroot(){
+#   echo "hwclock --systohc --localtime"
+#   hwclock --systohc --localtime
+#   exit
+# }
+
+# set_rootpassword(){
+#   clear
+#   arch_chroot set_rootpasswordchroot
+#   pressanykey
+# }
+
+# set_rootpasswordchroot(){
+#   echo "passwd root"
+#   passwd root
+#   exit
+# }
+
+# create_user(){
+#   clear
+#   newusername=$(whiptail --backtitle "$apptitle" --title "$txtcreatenewuser" --inputbox "" 0 0 "newhomeuser" 3>&1 1>&2 2>&3)
+  
+#   if [ "$?" = "0" ]; then    
+#     arch_chroot create_userchroot $newusername
+#   fi
+#   pressanykey
+# }
+
+# create_userchroot(){
+#   clear
+#   echo "useradd -m -s /bin/bash $1"
+#   useradd -m -s /bin/bash $1
+#   echo "usermod -aG wheel,storage,audio,video,power $1"
+#   usermod -aG wheel,storage,audio,video,power $1
+#   echo "passwd $1"
+#   passwd $1
+
+#   pressanykey
+
+#   echo "Setting up SUDO"
+
+#   yes | pacman -S sudo
+#   echo "Creating sudoers.backup"
+#   cp -v /etc/sudoers /etc/sudoers.backup
+#   echo "Uncommenting %wheel ALL=(ALL) ALL"
+#   sed -i '/%wheel ALL=(ALL) ALL/s/^#//' /etc/sudoers
+#   echo "'Defaults rootpw' >> /etc/sudoers"
+#   echo 'Defaults rootpw' >> /etc/sudoers
+#   #echo 'Defaults targetpw' >> /etc/sudoers
+#   exit
+# }
+
+# create_swapfile(){
+#   arch_chroot create_swapfilechroot
+# }
+
+# create_swapfilechroot(){
+#   clear
+#   if [ -e /swapfile ]; then
+#     echo "Removing old swapfile ..."
+#     remove_swapfile
+#   fi
+
+#   ramsize=$(cat /proc/meminfo | grep MemTotal | awk '{ print $2 }')
+#   echo "RAM: $ramsize B"
+
+#   if (( $ramsize >= 9000 )); then
+#     swapsize=$(($ramsize/2000))"M"
+#   elif (( $ramsize >= 3000 )); then
+#     swapsize=$(($ramsize/1000))"M"
+#   else
+#     swapsize=$(($ramsize/500))"M"
+#   fi
+#   echo "SWAPFILE SIZE: $swapsize M"
+#   echo "Creating...  ${swapsize//%1/M} /swapfile"
+#   fallocate -l ${swapsize//%1/M} /swapfile
+#   chmod 600 /swapfile
+#   echo "mkswap /swapfile"
+#   mkswap /swapfile
+#   echo "SWAPON /swapfile"
+#   swapon /swapfile
+#   #echo "'/swapfile swap swap defaults 0 0' >> /etc/fstab"
+#   #sudo echo "/swapfile swap swap defaults 0 0" >> /etc/fstab
+#   echo -e "Adding '/swapfile swap swap defaults 0 0' to /etc/fstab"
+#   echo '/swapfile swap swap defaults 0 0' | tee --append /etc/fstab
+#   pressanykey
+# }
+
+# remove_swapfile(){
+# clear
+#   echo "swapoff -a"
+#   swapoff -a
+#   echo "Removing /swapfile..."
+#   rm -f /swapfile
+#   echo "Removing '/swapfile swap swap defaults 0 0' from /etc/fstab"
+#   sh -c "sed -i '/swapfile swap swap defaults 0 0/d' /etc/fstab"
+#   #sudo sed -i '/swapfile swap swap defaults 0 0/d' /etc/fstab
+#   pressanykey
+# }
+
+# genfstab_menu(){
+#   options=()
+#   options+=("UUID" "genfstab -U")
+#   options+=("LABEL" "genfstab -L")
+#   options+=("PARTUUID" "genfstab -t PARTUUID")
+#   options+=("PARTLABEL" "genfstab -t PARTLABEL")
+#   sel=$(whiptail --backtitle "$apptitle" --title "Generate fstab" --menu "" --cancel-button "Back" --default-item "$nextitem" 0 0 0 \
+#     "${options[@]}" \
+#     3>&1 1>&2 2>&3)
+#   if [ "$?" = "0" ]; then
+#     case $sel in
+#       "UUID")
+#         clear
+#         echo "genfstab -U -p /mnt > /mnt/etc/fstab"
+#         genfstab -U -p /mnt > /mnt/etc/fstab
+#       ;;
+#       "LABEL")
+#         clear
+#         echo "genfstab -L -p /mnt > /mnt/etc/fstab"
+#         genfstab -L -p /mnt > /mnt/etc/fstab
+#       ;;
+#       "PARTUUID")
+#         clear
+#         echo "genfstab -t PARTUUID -p /mnt > /mnt/etc/fstab"
+#         genfstab -t PARTUUID -p /mnt > /mnt/etc/fstab
+#       ;;
+#       "PARTLABEL")
+#         clear
+#         echo "genfstab -t PARTLABEL -p /mnt > /mnt/etc/fstab"
+#         genfstab -t PARTLABEL -p /mnt > /mnt/etc/fstab
+#       ;;
+#     esac
+#   fi
+#   pressanykey
+# }
+
+# gen_crypttab(){
+#   clear
+#   echo "echo -e \"$crypttab\" >> /mnt/etc/crypttab"
+#   echo -e "$crypttab" >> /mnt/etc/crypttab
+#   pressanykey
+# }
+
+# gen_mkinitcpioluks(){
+#   clear
+#   echo "sed -i \"s/block filesystems/block encrypt filesystems/g\" /mnt/etc/mkinitcpio.conf"
+#   sed -i "s/block filesystems/block encrypt filesystems/g" /mnt/etc/mkinitcpio.conf
+#   arch_chroot gen_mkinitcpiochroot
+#   pressanykey
+# }
+
+# gen_mkinitcpionvme(){
+#   clear
+#   echo "sed -i \"s/MODULES=()/MODULES=(nvme)/g\" /mnt/etc/mkinitcpio.conf"
+#   sed -i "s/MODULES=()/MODULES=(nvme)/g" /mnt/etc/mkinitcpio.conf
+#   arch_chroot gen_mkinitcpiochroot
+#   pressanykey
+# }
+
+# edit_mkinitcpio(){
+#   $EDITOR /mnt/etc/mkinitcpio.conf
+#   if (whiptail --backtitle "$apptitle" --title "edit mkinitcpio.conf" --yesno "generate mkinitcpio ?" 0 0) then
+#     clear
+#     arch_chroot gen_mkinitcpiochroot
+#     pressanykey
+#   fi
+# }
+
+# gen_mkinitcpiochroot(){
+#   echo "mkinitcpio -p linux"
+#   mkinitcpio -p linux
+#   exit
+# }
+
+# enable_dhcpcd(){
+#   if (whiptail --backtitle "$apptitle" --title "Enable dhcpcd" --yesno "enable dhcpcd ?" 0 0) then
+#     clear
+#     arch_chroot enable_dhcpcdchroot
+#     pressanykey
+#   fi
+# }
+
+# enable_dhcpcdchroot(){
+#   echo "systemctl enable dhcpcd"
+#   systemctl enable dhcpcd
+#   exit
+# }
+
+# ----------------------------------------------------------------------------------------
+# GLOBAL FUNCTIONS
+# ----------------------------------------------------------------------------------------
+
+arch_chroot(){
+  echo "arch-chroot /mnt /root"
+  cp $0 /mnt/root
+  chmod 755 /mnt/root/$(basename "$0")
+  arch-chroot /mnt /root/$(basename "$0") -chroot $1 $2
+  rm /mnt/root/$(basename "$0")
+  echo "exit"
+}
+
+choose_editor(){
+    options=()
+    options+=("nano" "")
+    options+=("vim" "")
+    options+=("vi" "")
+    options+=("edit" "")
+    sel=$(whiptail --backtitle "$apptitle" --title "Choose Editor" --menu "" 0 0 0 \
+        "${options[@]}" \
+        3>&1 1>&2 2>&3)
+    if [ "$?" = "0" ]; then
+        EDITOR=$sel
+    fi
+}
+
+set_keymap(){
+    items=$(find /usr/share/kbd/keymaps/ -type f -printf "%f\n" | sort -V)
+    options=()
+    for item in $items; do
+        options+=("${item%%.*}" "")
+    done
+    keymap=$(whiptail --backtitle "$apptitle" --title "" --menu "" 0 0 0 \
+        "${options[@]}" \
+        3>&1 1>&2 2>&3)
+    if [ "$?" = "0" ]; then
+        clear
+        echo "loadkeys $keymap"
+        loadkeys $keymap
+        usingkeymap=$keymap
+        pressanykey
+        
+    fi
+}
+
+pressanykey(){
+  echo -e ""
+  read -n1 -p "Press any key to continue..."
+}
+
+rebootpc(){
+  if (whiptail --backtitle "$apptitle" --title "Reboot" --yesno "Reboot?" --defaultno 0 0) then
+    clear
+    reboot
+  fi
+}
+
+# ----------------------------------------------------------------------------------------
+# START OF THE PROGRAM
+# ----------------------------------------------------------------------------------------
+
+# this is for arch-chroot operations
+if [ "$1" = "-chroot" ]; then
+    # $2 is function to run, $3 is argument
+    eval $2 $3
+else
+    # normal program start
+
+    # load keymap
+    loadkeys $cfg_keymap
+
+    # check if efi is available
+    if [ -d "/sys/firmware/efi/efivars" ]; then
+        efi=1
+        echo -e ""
+        echo -e "EFI Available: YES"
+    else
+        efi=0
+        echo -e ""
+        echo -e "EFI Available: NO"
+    fi
+
+    # main menu start
+    pressanykey
+    main_menu
+fi
+exit 0
