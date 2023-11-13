@@ -1,0 +1,89 @@
+#!/bin/bash
+# ----------------------------------------------------------------------------------------
+# base_install - script to install Arch Linux on UEFI system
+# ----------------------------------------------------------------------------------------
+# author:     Ales Mrazek
+#             https://github.com/alesmrazek
+#
+# project:    https://github.com/mrazekales/archutils
+#
+# license:    LGPL-3.0 (https://opensource.org/license/lgpl-3-0/)
+
+bootsize="1024MiB"
+rootsize="100GiB"
+
+pressanykey(){
+  echo -e ""
+  read -n1 -p "Press any key to continue..."
+}
+
+arch_chroot(){
+  cp $0 /mnt/root
+  chmod 755 /mnt/root/$(basename "$0")
+  arch-chroot /mnt /root/$(basename "$0") -chroot $1 $2
+  rm /mnt/root/$(basename "$0")
+}
+
+# Select Device
+device=""
+isnvme=0
+
+PS3="Select a device: "
+devs=$(lsblk -d -p -n -l -o NAME -e 7,11)
+select dev in $devs
+do
+    if [ "${dev::8}" == "/dev/nvm" ]; then
+        isnvme=1
+    fi
+    device=$dev
+    echo "Selected $device device"
+    pressanykey
+done
+
+# Disk Partitioning
+parted $device -- mklabel gpt                           # create GPT
+parted $device -- mkpart ESP fat32 1MiB $bootsize       # boot partition
+parted $device -- mkpart primary $bootsize $rootsize    # root partition
+parted $device -- mkpart primary $rootsize 100%         # home partition
+parted $device -- set 1 boot on
+
+pressanykey
+
+# Partitions Formatting
+devsuff=""
+if [ "$isnvme" = "1" ]; then
+    devsuff="p"
+fi
+mkfs.fat -F 32 -n boot "($device)($devsuff)1"       # boot partition formatting
+mkfs.ext4 -L archlinux "($device)($devsuff)2"       # root partition formatting with 'archlinux' label
+cryptsetup -y -v luksFormat "($device)($devsuff)3"  # home partition encryption with LUKS
+cryptsetup open "($device)($devsuff)1" home   
+mkfs.ext4 -L home /dev/mapper/home                  # home partition formatting with 'home' label
+
+pressanykey
+
+# Partitions Mounting
+mount /dev/disk/by-label/archlinux /mnt     # mounting root partition to /mnt
+mkdir -p /mnt/home                          # creating home folder
+mount /dev/disk/by-label/home /mnt/home     # mounting home partition to /mnt/home
+mkdir -p /mnt/boot                          # creating boot folder
+mount /dev/disk/by-label/boot /mnt/boot     # mounting boot partition to /mnt/boot
+
+pressanykey
+
+# Arch Linux Installation
+pacstrap -K /mnt base linux linux-firmware
+
+pressanykey
+
+# Grub Preparation
+pacstrap /mnt grub efibootmgr
+mkdir -p mnt//boot/grub
+
+pressanykey
+
+# Grub installation
+arch-chroot /mnt grub-mkconfig -o /boot/grub/grub.cfg
+arch-chroot /mnt grub-install --target=x86_64-efi --efi-directory=/boot --recheck $1
+
+pressanykey
