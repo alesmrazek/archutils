@@ -28,6 +28,8 @@ arch_chroot(){
 device=""
 isnvme=0
 
+
+
 PS3="Select a device: "
 devs=$(lsblk -d -p -n -l -o NAME -e 7,11)
 select dev in $devs
@@ -36,9 +38,10 @@ do
         isnvme=1
     fi
     device=$dev
-    echo "Selected $device device"
-    pressanykey
+    echo "Selected $REPLY) $device device"
 done
+
+pressanykey
 
 # Disk Partitioning
 parted $device -- mklabel gpt                           # create GPT
