@@ -18,27 +18,28 @@ pressanykey(){
 }
 
 arch_chroot(){
-  cp $0 /mnt/root
-  chmod 755 /mnt/root/$(basename "$0")
-  arch-chroot /mnt /root/$(basename "$0") -chroot $1 $2
-  rm /mnt/root/$(basename "$0")
+    cp $0 /mnt/root
+    chmod 755 /mnt/root/$(basename "$0")
+    arch-chroot /mnt /root/$(basename "$0") -chroot $1 $2
+    rm /mnt/root/$(basename "$0")
 }
 
 # Select Device
 device=""
 isnvme=0
 
-
-
 PS3="Select a device: "
 devs=$(lsblk -d -p -n -l -o NAME -e 7,11)
 select dev in $devs
 do
-    if [ "${dev::8}" == "/dev/nvm" ]; then
-        isnvme=1
+    if [ $dev in $devs ]; then
+        if [ "${dev::8}" == "/dev/nvm" ]; then
+            isnvme=1
+        fi
+        device=$dev
+        echo "Selected $REPLY) $device device"
+        break
     fi
-    device=$dev
-    echo "Selected $REPLY) $device device"
 done
 
 pressanykey
