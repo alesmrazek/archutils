@@ -17,13 +17,6 @@ pressanykey(){
   read -n1 -p "Press any key to continue..."
 }
 
-arch_chroot(){
-    cp $0 /mnt/root
-    chmod 755 /mnt/root/$(basename "$0")
-    arch-chroot /mnt /root/$(basename "$0") -chroot $1 $2
-    rm /mnt/root/$(basename "$0")
-}
-
 # Select Device
 device=""
 isnvme=0
@@ -32,7 +25,7 @@ PS3="Select a device: "
 devs=$(lsblk -d -p -n -l -o NAME -e 7,11)
 select dev in $devs
 do
-    if [ $dev in $devs ]; then
+    if [ ! $dev = "" ]; then
         if [ "${dev::8}" == "/dev/nvm" ]; then
             isnvme=1
         fi
