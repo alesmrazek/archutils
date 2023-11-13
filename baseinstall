@@ -13,8 +13,9 @@ bootsize="1024MiB"
 rootsize="100GiB"
 
 pressanykey(){
-  echo -e ""
-  read -n1 -p "Press any key to continue..."
+    echo -e ""
+    read -n1 -p "Press any key to continue..."
+    echo -e ""
 }
 
 # Select Device
@@ -30,7 +31,7 @@ do
             isnvme=1
         fi
         device=$dev
-        echo "Selected $REPLY) $device device"
+        echo "$device selected"
         break
     fi
 done
@@ -51,10 +52,10 @@ devsuff=""
 if [ "$isnvme" = "1" ]; then
     devsuff="p"
 fi
-mkfs.fat -F 32 -n boot "($device)($devsuff)1"       # boot partition formatting
-mkfs.ext4 -L archlinux "($device)($devsuff)2"       # root partition formatting with 'archlinux' label
-cryptsetup -y -v luksFormat "($device)($devsuff)3"  # home partition encryption with LUKS
-cryptsetup open "($device)($devsuff)1" home   
+mkfs.fat -F 32 -n boot ($device)($devsuff)1         # boot partition formatting
+mkfs.ext4 -L archlinux ($device)($devsuff)2         # root partition formatting with 'archlinux' label
+cryptsetup -y -v luksFormat ($device)($devsuff)3    # home partition encryption with LUKS
+cryptsetup open ($device)($devsuff)1 home   
 mkfs.ext4 -L home /dev/mapper/home                  # home partition formatting with 'home' label
 
 pressanykey
