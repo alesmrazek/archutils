@@ -52,10 +52,10 @@ devsuff=""
 if [ "$isnvme" = "1" ]; then
     devsuff="p"
 fi
-mkfs.fat -F 32 -n boot $device$devsuff"1"         # boot partition formatting
+mkfs.fat -F 32 -n BOOT $device$devsuff"1"         # boot partition formatting
 mkfs.ext4 -L archlinux $device$devsuff"2"         # root partition formatting with 'archlinux' label
 cryptsetup -y -v luksFormat $device$devsuff"3"    # home partition encryption with LUKS
-cryptsetup open $device$devsuff"1" home   
+cryptsetup open $device$devsuff"3" home   
 mkfs.ext4 -L home /dev/mapper/home                  # home partition formatting with 'home' label
 
 pressanykey
@@ -65,7 +65,7 @@ mount /dev/disk/by-label/archlinux /mnt     # mounting root partition to /mnt
 mkdir -p /mnt/home                          # creating home folder
 mount /dev/disk/by-label/home /mnt/home     # mounting home partition to /mnt/home
 mkdir -p /mnt/boot                          # creating boot folder
-mount /dev/disk/by-label/boot /mnt/boot     # mounting boot partition to /mnt/boot
+mount /dev/disk/by-label/BOOT /mnt/boot     # mounting boot partition to /mnt/boot
 
 pressanykey
 
